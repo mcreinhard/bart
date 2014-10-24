@@ -2,3 +2,4 @@ bower_components
 main
 *.hi
 *.o
+*.js
