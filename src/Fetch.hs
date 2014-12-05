@@ -1,5 +1,5 @@
-{-# LANGUAGE OverloadedStrings #-}
-module Fetch (bartApiFetch, stationNames, schedule) where
+{-# LANGUAGE OverloadedStrings, Arrows #-}
+module Fetch (bartApiFetch, stationNames, stationDistancesForRoute) where
 
 import Control.Applicative
 import Control.Arrow
@@ -22,22 +22,6 @@ bartApiFetch section cmd options =
         where allOptions = ("cmd",cmd):("key",key):options
               url = baseUrl ++ "/" ++ section ++ ".aspx"
 
-stationNames :: CIO [(String,String)]
-stationNames = liftM (runKleisli selectNames) (bartApiFetch "stn" "stns" []) 
-    where selectNames = parseXML
-              >>> atTag "station" 
-              >>> (atTag "abbr" >>> text) &&& (atTag "name" >>> text)
-
-schedule :: CIO [Int]
-schedule = liftM (runKleisli selectLongTrain) (bartApiFetch "sched" "routesched" [("route","1")])
-    where selectLongTrain = parseXML
-              >>> findOne (atTag "train" >>> filterBy hasAllOrigTimes)
-              >>> getChildren
-              >>> getAttr "origTime"
-              >>^ timeToMinutes
-          hasAllOrigTimes train = let stops = runKleisli getChildren train in
-              all (hasAttr "origTime") stops
-
 timeToMinutes :: String -> Int
 timeToMinutes timeString = 60*hoursFromMidnight + read minutes
     where hours = takeWhile (/= ':') timeString
@@ -45,4 +29,31 @@ timeToMinutes timeString = 60*hoursFromMidnight + read minutes
           ampm = tail . dropWhile (/= ' ') $ timeString
           hoursFromMidnight = (read hours `mod` 12)
                               + (if ampm == "PM" then 12 else 0)
+
+-- XML parsing
+stationNamesFromXML :: String -> [(String,String)]
+stationNamesFromXML = runKleisli $ parseXML
+    >>> atTag "station" 
+    >>> (atTag "abbr" >>> text) &&& (atTag "name" >>> text)
+
+stationDistancesFromXML :: String -> [(String,Int)]
+stationDistancesFromXML = runKleisli $ proc xml -> do
+        parsed <- parseXML -< xml
+        longTrain <- findOne (filterBy hasAllOrigTimes <<< atTag "train") -< parsed
+        firstStop <- findOne getChildren -< longTrain
+        stops <- getChildren -< longTrain
+        startTime <- timeToMinutes ^<< getAttr "origTime" -< firstStop
+        times <- timeToMinutes ^<< getAttr "origTime" -< stops
+        names <- getAttr "station" -< stops
+        timesFromStart <- arr (uncurry (-)) -< (times,startTime)
+        returnA -< (names,timesFromStart)
+    where hasAllOrigTimes = all (hasAttr "origTime") . runKleisli getChildren 
+
+-- IO code
+stationNames :: CIO [(String,String)]
+stationNames = liftM stationNamesFromXML $ bartApiFetch "stn" "stns" [] 
+
+stationDistancesForRoute :: Int -> CIO [(String,Int)]
+stationDistancesForRoute n = liftM stationDistancesFromXML
+    $ bartApiFetch "sched" "routesched" [("route",show n)]
 

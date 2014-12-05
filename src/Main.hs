@@ -25,6 +25,8 @@ main = do
     concurrent $ do
         names <- stationNames
         liftIO $ print names
-        sched <-schedule
+        sched <- stationDistancesForRoute 1
         liftIO $ print sched
+        sched2 <- stationDistancesForRoute 2
+        liftIO $ print sched2
 
