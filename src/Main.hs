@@ -1,9 +1,10 @@
+import Haste.Concurrent
+import Haste.Foreign
+import Haste.Prim
+
+import Fetch
 import Path
 import Raphael
-import Fetch
-import Haste.Prim
-import Haste.Foreign
-import Haste.Concurrent
 
 testPath :: Anchored Path
 testPath = Anchored (10,10) 2 [Line 5, Arc L 3 pi]
@@ -21,5 +22,7 @@ main = do
     _ <- setViewBox (-2,-2) (64,42) paper
     _ <- path (pathD testPath) paper
     putStrLn $ pathD testPath
-    concurrent $ stationNames >>= liftIO . mapM_ print
+    concurrent $ do
+        names <- stationNames
+        liftIO $ print names
 

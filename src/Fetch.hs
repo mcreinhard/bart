@@ -1,11 +1,14 @@
-{-# LANGUAGE Arrows #-}
-module Fetch (stationNames) where
+{-# LANGUAGE OverloadedStrings #-}
+module Fetch (bartApiFetch, stationNames, schedule, timeToMinutes) where
 
-import Haste.Concurrent
+import XMLArrow
 import Control.Monad
+import Control.Arrow
 import Control.Applicative
 import Data.Maybe
-import Text.XML.HXT.Core
+import Data.Text (splitOn, pack, unpack)
+import Haste.Concurrent
+import Text.XML.Light.Types
 
 baseUrl :: String
 baseUrl = "http://api.bart.gov/api"
@@ -19,17 +22,21 @@ bartApiFetch section cmd options =
         where allOptions = ("cmd",cmd):("key",key):options
               url = baseUrl ++ "/" ++ section ++ ".aspx"
 
-atTag :: String -> LA XmlTree XmlTree
-atTag tag = deep (isElem >>> hasName tag)
-
-text :: LA XmlTree String
-text = getChildren >>> getText
-
 stationNames :: CIO [(String,String)]
-stationNames = liftM (runLA selectNames) (bartApiFetch "stn" "stns" [])
-    where selectNames = xreadDoc >>> atTag "station" 
-                                 >>> proc x -> do
-                                       abbr <- text <<< atTag "abbr" -< x
-                                       name <- text <<< atTag "name" -< x
-                                       returnA -< (abbr,name)
+stationNames = liftM (runKleisli selectNames) (bartApiFetch "stn" "stns" []) 
+    where selectNames = parseXML
+                        >>> atTag "station" 
+                        >>> (atTag "abbr" >>> text) &&& (atTag "name" >>> text)
+
+schedule :: CIO [Content]
+schedule = liftM (runKleisli selectLongTrain) (bartApiFetch "sched" "stnsched" [("orig","embr")])
+    where selectLongTrain = parseXML -- TODO: implement this with XMLArrow
+                            {->>> atTag "train"
+                            >>> (getChildren >. all (not . null . runLA (hasAttr "origTime")))-}
+
+timeToMinutes :: String -> Int
+timeToMinutes timeString = 60*hoursFromMidnight + read minutes
+    where [hours,minutes,ampm] = map unpack . splitOn " :" $ pack timeString
+          hoursFromMidnight = (read hours `mod` 12)
+                              + (if ampm == "PM" then 12 else 0)
 
