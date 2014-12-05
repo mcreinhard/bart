@@ -1,14 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Fetch (bartApiFetch, stationNames, schedule, timeToMinutes) where
+module Fetch (bartApiFetch, stationNames, schedule) where
+
+import Control.Applicative
+import Control.Arrow
+import Control.Monad
+import Data.Maybe
+
+import Haste.Concurrent
 
 import XMLArrow
-import Control.Monad
-import Control.Arrow
-import Control.Applicative
-import Data.Maybe
-import Data.Text (splitOn, pack, unpack)
-import Haste.Concurrent
-import Text.XML.Light.Types
 
 baseUrl :: String
 baseUrl = "http://api.bart.gov/api"
@@ -25,18 +25,24 @@ bartApiFetch section cmd options =
 stationNames :: CIO [(String,String)]
 stationNames = liftM (runKleisli selectNames) (bartApiFetch "stn" "stns" []) 
     where selectNames = parseXML
-                        >>> atTag "station" 
-                        >>> (atTag "abbr" >>> text) &&& (atTag "name" >>> text)
+              >>> atTag "station" 
+              >>> (atTag "abbr" >>> text) &&& (atTag "name" >>> text)
 
-schedule :: CIO [Content]
-schedule = liftM (runKleisli selectLongTrain) (bartApiFetch "sched" "stnsched" [("orig","embr")])
-    where selectLongTrain = parseXML -- TODO: implement this with XMLArrow
-                            {->>> atTag "train"
-                            >>> (getChildren >. all (not . null . runLA (hasAttr "origTime")))-}
+schedule :: CIO [Int]
+schedule = liftM (runKleisli selectLongTrain) (bartApiFetch "sched" "routesched" [("route","1")])
+    where selectLongTrain = parseXML
+              >>> findOne (atTag "train" >>> filterBy hasAllOrigTimes)
+              >>> getChildren
+              >>> getAttr "origTime"
+              >>^ timeToMinutes
+          hasAllOrigTimes train = let stops = runKleisli getChildren train in
+              all (hasAttr "origTime") stops
 
 timeToMinutes :: String -> Int
 timeToMinutes timeString = 60*hoursFromMidnight + read minutes
-    where [hours,minutes,ampm] = map unpack . splitOn " :" $ pack timeString
+    where hours = takeWhile (/= ':') timeString
+          minutes = takeWhile (/= ' ') . tail . dropWhile (/= ':') $ timeString
+          ampm = tail . dropWhile (/= ' ') $ timeString
           hoursFromMidnight = (read hours `mod` 12)
                               + (if ampm == "PM" then 12 else 0)
 

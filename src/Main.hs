@@ -25,4 +25,6 @@ main = do
     concurrent $ do
         names <- stationNames
         liftIO $ print names
+        sched <-schedule
+        liftIO $ print sched
 

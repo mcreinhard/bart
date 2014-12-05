@@ -1,45 +1,61 @@
 -- Like HXT but not a mess
 module XMLArrow where
 
-import Text.XML.Light.Types
-import qualified Text.XML.Light.Input as Input
 import Control.Arrow
 
-type XMLArrow = Kleisli [] Content Content
+import qualified Text.XML.Light.Input as Input
+import Text.XML.Light.Types
 
-filterBy :: (Content -> Bool) -> XMLArrow
-filterBy p = Kleisli $ \c -> [c | p c]
+type LA = Kleisli []
+type ContentLA = LA Content Content
 
-getChildren :: XMLArrow
-getChildren = Kleisli $ \c -> case c of
-                                Elem Element{elContent = children} -> children
-                                _                                  -> []
+-- Predicates
+isElem :: Content -> Bool
+isElem x = case x of Elem _ -> True
+                     _      -> False
 
-orElse :: XMLArrow -> XMLArrow -> XMLArrow
-orElse f g = Kleisli $ \c -> let res = runKleisli f c in
-                               case res of [] -> runKleisli g c
-                                           _  -> res
+hasName :: String -> Content -> Bool
+hasName s x = case x of Elem Element{elName = QName{qName = t}} -> s == t
+                        _                                       -> False
 
-deep :: XMLArrow -> XMLArrow
+hasAttr :: String -> Content -> Bool
+hasAttr s x = runKleisli (getAttr s) x /= []
+
+-- Arrows
+filterBy :: (a -> Bool) -> LA a a
+filterBy p = Kleisli f where
+    f x = [x | p x]
+
+orElse :: ContentLA -> ContentLA -> ContentLA
+orElse a b = Kleisli f where
+    f x = let res = runKleisli a x in
+              case res of [] -> runKleisli b x
+                          _  -> res
+
+deep :: ContentLA -> ContentLA
 deep f = f `orElse` (getChildren >>> deep f)
 
-isElem :: XMLArrow
-isElem = filterBy $ \c -> case c of
-                            Elem _ -> True
-                            _      -> False
+atTag :: String -> ContentLA
+atTag s = deep (filterBy isElem >>> filterBy (hasName s))
 
-hasName :: String -> XMLArrow
-hasName s = filterBy $ \c -> case c of
-                               Elem Element{elName = QName{qName = t}} -> s == t
-                               _ -> False
+getChildren :: ContentLA
+getChildren = Kleisli f where
+    f x = case x of Elem Element{elContent = children} -> children
+                    _                                  -> []
 
-atTag :: String -> XMLArrow
-atTag s = deep (isElem >>> hasName s)
+getAttr :: String -> LA Content String
+getAttr s = Kleisli f where
+  f x = case x of Elem Element{elAttribs = attrs} -> 
+                      [attrVal a | a<-attrs, qName (attrKey a) == s]
+                  _                               -> []
 
-text :: Kleisli [] Content String
-text = getChildren >>> (Kleisli $ \c -> case c of
-                                            Text CData{cdData = s} -> [s]
-                                            _                      -> [])
+text :: LA Content String
+text = getChildren >>> Kleisli f where
+    f x = case x of Text CData{cdData = s} -> [s]
+                    _                      -> []
 
-parseXML :: Kleisli [] String Content
+parseXML :: LA String Content
 parseXML = Kleisli Input.parseXML
+
+findOne :: LA a b -> LA a b
+findOne (Kleisli f) = Kleisli (take 1 . f)
